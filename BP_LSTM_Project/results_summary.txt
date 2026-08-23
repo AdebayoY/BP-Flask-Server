@@ -1,0 +1,10 @@
+BP LSTM Model — Results Summary
+================================
+
+Model One (PPG only)
+  SBP MAE: 13.32 mmHg
+  DBP MAE: 7.50 mmHg
+
+Model Two (PPG + Physiological)
+  SBP MAE: 10.88 mmHg
+  DBP MAE: 5.76 mmHg

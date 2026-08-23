@@ -9,7 +9,7 @@ import tensorflow as tf
 app = Flask(__name__)
 
 # Load model and scalers
-model = tf.keras.models.load_model('bp_lstm_model.h5', compile=False)
+model = tf.keras.models.load_model('bp_lstm_model.keras', compile=False)
 
 with open('scalers.pkl', 'rb') as f:
     scalers = pickle.load(f)
