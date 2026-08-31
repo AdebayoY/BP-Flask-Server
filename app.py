@@ -275,6 +275,7 @@ def get_active_patient():
 @app.route('/predict', methods=['POST'])
 def predict():
     data = request.get_json()
+    print(f"[DEBUG] /predict called from IP={request.remote_addr}, User-Agent={request.headers.get('User-Agent')}")
 
     with _active_lock:
         patient_id = ACTIVE_PATIENT_ID
