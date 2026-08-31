@@ -8,8 +8,13 @@ from threading import Lock
 import os
 import json
 import uuid
+import hashlib
+import base64
+import re
 import firebase_admin
 from firebase_admin import credentials, messaging
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
 
 app = Flask(__name__)
 
@@ -64,6 +69,93 @@ def register_token():
     return jsonify({"status": "registered"})
 
 
+# --- Nurse accounts: SHA-256 hash, then AES-128-CBC encrypt the hash -------
+_aes_key_b64 = os.environ.get('AES_SECRET_KEY_BASE64')
+AES_KEY = base64.b64decode(_aes_key_b64) if _aes_key_b64 else None
+if AES_KEY is None:
+    print("AES_SECRET_KEY_BASE64 not set — nurse login will not work until it is.")
+
+NURSES = {}  # email -> {"ciphertext": b64 str, "iv": b64 str}
+_nurses_lock = Lock()
+
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+PASSWORD_REGEX = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d]{6}$')
+
+
+def _hash_password(password):
+    return hashlib.sha256(password.encode()).digest()
+
+
+def _encrypt_hash(hash_bytes):
+    iv = os.urandom(16)
+    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(hash_bytes) + padder.finalize()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    return ciphertext, iv
+
+
+def _verify_password(stored_ciphertext, stored_iv, password_attempt):
+    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(stored_iv))
+    decryptor = cipher.decryptor()
+    padded = decryptor.update(stored_ciphertext) + decryptor.finalize()
+    unpadder = padding.PKCS7(128).unpadder()
+    original_hash = unpadder.update(padded) + unpadder.finalize()
+    return original_hash == _hash_password(password_attempt)
+
+
+@app.route('/register_nurse', methods=['POST'])
+def register_nurse():
+    if AES_KEY is None:
+        return jsonify({"error": "Server auth not configured"}), 500
+
+    data = request.get_json()
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not EMAIL_REGEX.match(email):
+        return jsonify({"error": "Invalid email format"}), 400
+    if not PASSWORD_REGEX.match(password):
+        return jsonify({
+            "error": "Password must be exactly 6 characters with at least "
+                     "one uppercase letter, one lowercase letter, and one number"
+        }), 400
+
+    with _nurses_lock:
+        if email in NURSES:
+            return jsonify({"error": "Email already registered"}), 409
+        ciphertext, iv = _encrypt_hash(_hash_password(password))
+        NURSES[email] = {
+            "ciphertext": base64.b64encode(ciphertext).decode(),
+            "iv": base64.b64encode(iv).decode(),
+        }
+
+    return jsonify({"status": "registered", "email": email}), 201
+
+
+@app.route('/login_nurse', methods=['POST'])
+def login_nurse():
+    if AES_KEY is None:
+        return jsonify({"error": "Server auth not configured"}), 500
+
+    data = request.get_json()
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    with _nurses_lock:
+        record = NURSES.get(email)
+    if record is None:
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    ciphertext = base64.b64decode(record["ciphertext"])
+    iv = base64.b64decode(record["iv"])
+    if not _verify_password(ciphertext, iv, password):
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    return jsonify({"status": "ok", "email": email})
+
+
 # Load model and scalers
 model = tf.keras.models.load_model('bp_lstm_model.keras', compile=False)
 with open('scalers.pkl', 'rb') as f:
@@ -75,11 +167,9 @@ print("Model and scalers loaded successfully.")
 
 WINDOW_SIZE = 250
 
-# --- Patient registry ------------------------------------------------------
 PATIENTS = {}
 _patients_lock = Lock()
 
-# The one patient the ESP32's readings should currently be attributed to.
 ACTIVE_PATIENT_ID = None
 _active_lock = Lock()
 
