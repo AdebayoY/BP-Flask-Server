@@ -101,7 +101,7 @@ def classify_bp(sbp, dbp):
 @app.route('/predict', methods=['POST'])
 def predict():
     data = request.get_json()
-        print(f"[DEBUG] Received: age={data.get('age')}, sex={data.get('sex')}, heart_rate={data.get('heart_rate')}, patient_id={data.get('patient_id')}")
+    print(f"[DEBUG] Received: age={data.get('age')}, sex={data.get('sex')}, heart_rate={data.get('heart_rate')}, patient_id={data.get('patient_id')}")
     ppg_ir  = np.array(data['ppg_ir'], dtype=np.float32)
     ppg_red = np.array(data['ppg_red'], dtype=np.float32)
     age     = float(data['age'])
